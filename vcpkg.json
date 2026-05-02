@@ -1,0 +1,16 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "mapviewer",
+  "version-string": "0.1.0",
+  "description": "Korean road-name address 3D map viewer prototype",
+  "dependencies": [
+    "glfw3",
+    {"name": "glad", "default-features": false, "features": ["gl-api-46"]},
+    "glm",
+    "concurrentqueue",
+    "gtest",
+    "geographiclib",
+    "nlohmann-json",
+    {"name": "imgui", "features": ["glfw-binding", "opengl3-binding"]}
+  ]
+}

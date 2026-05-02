@@ -1,0 +1,24 @@
+{
+  "render": {
+    "update_period_s": 0.5,
+    "polygon_fill_color":    [0.42, 0.50, 0.72, 1.0],
+    "polygon_outline_color": [0.85, 0.92, 1.00, 1.0],
+    "polygon_outline_width": 1.5,
+    "polyline_color":        [0.95, 0.85, 0.30, 1.0],
+    "polyline_width":        2.5,
+    "point_color":           [1.00, 0.55, 0.25, 1.0],
+    "building_fixed_height_m": 10.0
+  },
+  "camera": {
+    "default_pos_utmk_x": 953900.0,
+    "default_pos_utmk_y": 1952030.0,
+    "default_pos_alt_m":  80.0
+  },
+  "location_log": {
+    "enabled":  true,
+    "csv_path": "assets/samples/location_log_sample.csv"
+  },
+  "data": {
+    "source": "sample"
+  }
+}
