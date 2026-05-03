@@ -286,7 +286,8 @@ void Renderer::load_tile(const MapTileLoadedMsg& tile, float building_height_m) 
         tile_buildings_index_count_ = 0;
     }
 
-    // Roads — offset polyline into a quad strip at z=0.05
+    // Roads — quad strip slab at z=0.5 m using the feature's actual width_m.
+    constexpr float kRoadZ = 0.5f;
     constexpr float kRoadR = 0.94f, kRoadG = 0.84f, kRoadB = 0.30f;
 
     std::vector<float> r_verts;
@@ -314,10 +315,10 @@ void Renderer::load_tile(const MapTileLoadedMsg& tile, float building_height_m) 
             const glm::vec2 n{-t.y, t.x};
             const float lx = static_cast<float>(rf.line[i].first  - tile_origin_.x);
             const float ly = static_cast<float>(rf.line[i].second - tile_origin_.y);
-            push_vertex(r_verts, lx + n.x * w, ly + n.y * w, 0.05f,
+            push_vertex(r_verts, lx + n.x * w, ly + n.y * w, kRoadZ,
                         kRoadR, kRoadG, kRoadB,
                         0.0f, 0.0f, 1.0f);
-            push_vertex(r_verts, lx - n.x * w, ly - n.y * w, 0.05f,
+            push_vertex(r_verts, lx - n.x * w, ly - n.y * w, kRoadZ,
                         kRoadR, kRoadG, kRoadB,
                         0.0f, 0.0f, 1.0f);
         }

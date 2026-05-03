@@ -19,6 +19,7 @@ find_package(GTest CONFIG REQUIRED)
 find_package(GeographicLib CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
+find_package(libpqxx CONFIG REQUIRED)
 
 add_library(mv_core STATIC
     src/core/SessionId.cpp
@@ -53,6 +54,7 @@ target_link_libraries(mv_core
         glfw
         nlohmann_json::nlohmann_json
         imgui::imgui
+        libpqxx::pqxx
 )
 if(WIN32)
     target_link_libraries(mv_core PUBLIC opengl32)

@@ -139,6 +139,22 @@ void RenderModule::frame() {
     }
     check_collisions(now);
 
+    // Re-request map data when camera drifts > 300 m from last tile centre.
+    {
+        auto& cam = renderer_->camera();
+        const glm::dvec2 cam_xy{cam.position.x, cam.position.y};
+        const glm::dvec2 tile_xy{last_tile_center_.x, last_tile_center_.y};
+        if (glm::distance(cam_xy, tile_xy) > 200.0) {
+            MapBoundsRequestMsg req;
+            req.center_x = cam.position.x;
+            req.center_y = cam.position.y;
+            req.radius_m = 800.0;
+            req.lod      = 1;
+            bus_->publish(req);
+            last_tile_center_ = glm::dvec3{cam.position.x, cam.position.y, 0.0};
+        }
+    }
+
     renderer_->begin_frame();
     renderer_->draw_grid();
     renderer_->draw_tile();
@@ -175,6 +191,11 @@ void RenderModule::draw_ui_overlay() {
             last_published_fov_ = fov;
         }
         ImGui::Text("Effective FoV: %.1f°", cam.effective_fov_deg());
+        ImGui::Separator();
+        ImGui::TextDisabled("WASD/화살표: 지도 이동  Q/E: 고도");
+        ImGui::TextDisabled("PageUp/Down: 시점 상하  Z/X: 시점 좌우 회전");
+        ImGui::TextDisabled("우클릭 드래그: 자유 시점  가운데 드래그: 패닝");
+        ImGui::TextDisabled("Shift: 4배속  [/]: FoV  좌클릭: 건물 선택");
     }
     ImGui::End();
 
@@ -216,7 +237,7 @@ void RenderModule::draw_ui_overlay() {
             }
             ImGui::End();
         }
-        // Pick info
+        // Pick info (side panel — kept for detail view)
         const auto pk = ui_->current_pick();
         if (!pk.kind.empty()) {
             ImGui::SetNextWindowPos(ImVec2(vp->WorkSize.x - 360,
@@ -231,6 +252,39 @@ void RenderModule::draw_ui_overlay() {
             ImGui::End();
         }
     }
+
+    // ── Building click popup ──────────────────────────────────────────────────
+    if (show_pick_popup_) {
+        ImGui::OpenPopup("##building_popup");
+        show_pick_popup_ = false;
+    }
+    // Centre the popup in the viewport
+    ImGuiViewport* vp2 = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(
+        ImVec2(vp2->WorkPos.x + vp2->WorkSize.x * 0.5f,
+               vp2->WorkPos.y + vp2->WorkSize.y * 0.5f),
+        ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(400, 0), ImGuiCond_Always);
+    if (ImGui::BeginPopup("##building_popup",
+                           ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize)) {
+        // Building name in larger, highlighted text
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.92f, 0.50f, 1.0f));
+        ImGui::SetWindowFontScale(1.35f);
+        ImGui::TextWrapped("%s", pick_popup_name_.c_str());
+        ImGui::SetWindowFontScale(1.0f);
+        ImGui::PopStyleColor();
+        if (!pick_popup_addr_.empty()) {
+            ImGui::TextDisabled("%s", pick_popup_addr_.c_str());
+        }
+        ImGui::Separator();
+        ImGui::TextWrapped("%s", pick_popup_json_.c_str());
+        ImGui::Separator();
+        if (ImGui::Button("닫기", ImVec2(-1.0f, 0.0f)) ||
+            ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
 }
 
 void RenderModule::handle_input(float dt_s) {
@@ -244,25 +298,38 @@ void RenderModule::handle_input(float dt_s) {
     const float move_speed = (glfwGetKey(w, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) ? 200.0f : 50.0f;
     const float turn_speed = 60.0f;
 
-    glm::vec3 forward = cam.forward();
-    forward.z = 0.0f;
-    if (glm::length(forward) > 1e-4f) forward = glm::normalize(forward);
-    const glm::vec3 right_v = cam.right();
+    // Use yaw-based ground_forward so WASD / arrows work correctly even when
+    // pitch = -90° (cam.forward() projected onto XY becomes (0,0) at ±90°).
+    const float yaw_r = glm::radians(cam.yaw_deg);
+    const glm::vec3 ground_fwd{ std::sin(yaw_r),  std::cos(yaw_r), 0.0f };
+    const glm::vec3 right_v = cam.right(); // (cos(yaw), -sin(yaw), 0)
 
     glm::dvec3 delta{0.0};
-    if (glfwGetKey(w, GLFW_KEY_W) == GLFW_PRESS) delta += glm::dvec3{forward * (move_speed * dt_s)};
-    if (glfwGetKey(w, GLFW_KEY_S) == GLFW_PRESS) delta -= glm::dvec3{forward * (move_speed * dt_s)};
-    if (glfwGetKey(w, GLFW_KEY_D) == GLFW_PRESS) delta += glm::dvec3{right_v * (move_speed * dt_s)};
-    if (glfwGetKey(w, GLFW_KEY_A) == GLFW_PRESS) delta -= glm::dvec3{right_v * (move_speed * dt_s)};
+    // WASD: translate in the yaw-forward/right plane
+    if (glfwGetKey(w, GLFW_KEY_W) == GLFW_PRESS) delta += glm::dvec3{ground_fwd  * (move_speed * dt_s)};
+    if (glfwGetKey(w, GLFW_KEY_S) == GLFW_PRESS) delta -= glm::dvec3{ground_fwd  * (move_speed * dt_s)};
+    if (glfwGetKey(w, GLFW_KEY_D) == GLFW_PRESS) delta += glm::dvec3{right_v     * (move_speed * dt_s)};
+    if (glfwGetKey(w, GLFW_KEY_A) == GLFW_PRESS) delta -= glm::dvec3{right_v     * (move_speed * dt_s)};
     if (glfwGetKey(w, GLFW_KEY_E) == GLFW_PRESS) delta.z += move_speed * dt_s;
     if (glfwGetKey(w, GLFW_KEY_Q) == GLFW_PRESS) delta.z -= move_speed * dt_s;
+
+    // Arrow keys: also translate (same semantics as WASD, so map stays navigable
+    // regardless of pitch).  Rotation is handled exclusively by right-click drag.
+    if (glfwGetKey(w, GLFW_KEY_UP)    == GLFW_PRESS) delta += glm::dvec3{ground_fwd * (move_speed * dt_s)};
+    if (glfwGetKey(w, GLFW_KEY_DOWN)  == GLFW_PRESS) delta -= glm::dvec3{ground_fwd * (move_speed * dt_s)};
+    if (glfwGetKey(w, GLFW_KEY_LEFT)  == GLFW_PRESS) delta -= glm::dvec3{right_v    * (move_speed * dt_s)};
+    if (glfwGetKey(w, GLFW_KEY_RIGHT) == GLFW_PRESS) delta += glm::dvec3{right_v    * (move_speed * dt_s)};
+
+    // Page Up/Down: pitch tilt (look around vertically)
+    if (glfwGetKey(w, GLFW_KEY_PAGE_UP)   == GLFW_PRESS) cam.pitch_deg += turn_speed * dt_s;
+    if (glfwGetKey(w, GLFW_KEY_PAGE_DOWN) == GLFW_PRESS) cam.pitch_deg -= turn_speed * dt_s;
+    // Z / X: yaw rotate (spin map view clockwise / counter-clockwise)
+    if (glfwGetKey(w, GLFW_KEY_Z) == GLFW_PRESS) cam.yaw_deg -= turn_speed * dt_s;
+    if (glfwGetKey(w, GLFW_KEY_X) == GLFW_PRESS) cam.yaw_deg += turn_speed * dt_s;
+
     cam.position += delta;
 
-    if (glfwGetKey(w, GLFW_KEY_LEFT)  == GLFW_PRESS) cam.yaw_deg -= turn_speed * dt_s;
-    if (glfwGetKey(w, GLFW_KEY_RIGHT) == GLFW_PRESS) cam.yaw_deg += turn_speed * dt_s;
-    if (glfwGetKey(w, GLFW_KEY_UP)    == GLFW_PRESS) cam.pitch_deg += turn_speed * dt_s;
-    if (glfwGetKey(w, GLFW_KEY_DOWN)  == GLFW_PRESS) cam.pitch_deg -= turn_speed * dt_s;
-
+    // ---- Right-click drag: mouse-look (yaw / pitch) ----
     if (glfwGetMouseButton(w, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) {
         double mx = 0.0, my = 0.0;
         glfwGetCursorPos(w, &mx, &my);
@@ -278,7 +345,34 @@ void RenderModule::handle_input(float dt_s) {
         mouse_initialized_ = false;
     }
 
-    cam.pitch_deg = glm::clamp(cam.pitch_deg, -89.0f, 89.0f);
+    // ---- Middle-click drag: map pan (XY translate) ----
+    if (glfwGetMouseButton(w, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS) {
+        double mx = 0.0, my = 0.0;
+        glfwGetCursorPos(w, &mx, &my);
+        if (!pan_initialized_) {
+            last_pan_x_ = mx; last_pan_y_ = my;
+            pan_initialized_ = true;
+        }
+        const double dx = mx - last_pan_x_;
+        const double dy = my - last_pan_y_;
+        last_pan_x_ = mx; last_pan_y_ = my;
+
+        // Pan scale proportional to altitude so speed stays constant on screen.
+        const double pan_factor = std::max(cam.position.z, 10.0) * 0.0018;
+        // In top-down view the view matrix aligns world-X with screen-X and
+        // world-Y with screen-Y (screen Y increases downward → negate for Y).
+        // For non-vertical orientations, use the camera's right/screen-up axes.
+        const float pan_yaw_r = glm::radians(cam.yaw_deg);
+        const glm::dvec3 scr_right{ std::cos(pan_yaw_r), -std::sin(pan_yaw_r), 0.0};
+        const glm::dvec3 scr_up   {-std::sin(pan_yaw_r), -std::cos(pan_yaw_r), 0.0};
+        delta += scr_right * (-dx * pan_factor);
+        delta += scr_up    * ( dy * pan_factor);
+    } else {
+        pan_initialized_ = false;
+    }
+
+    // Allow pitch to reach exactly ±90° (gimbal lock handled in Camera::view_local).
+    cam.pitch_deg = glm::clamp(cam.pitch_deg, -90.0f, 90.0f);
 
     static int prev_lb = GLFW_RELEASE, prev_rb = GLFW_RELEASE;
     const int lb = glfwGetKey(w, GLFW_KEY_LEFT_BRACKET);
@@ -349,6 +443,12 @@ void RenderModule::run_pick(int sx, int sy) {
         j["buld_nm"]    = f.buld_nm;
         j["gro_floors"] = f.gro_floors;
         pr.props_json = j.dump(2);
+
+        // Trigger center popup with the building name
+        pick_popup_name_ = f.buld_nm.empty() ? f.id : f.buld_nm;
+        pick_popup_addr_ = f.addr_road;
+        pick_popup_json_ = pr.props_json;
+        show_pick_popup_ = true;
     } else {
         pr.kind = PickResultMsg::Kind::None;
     }

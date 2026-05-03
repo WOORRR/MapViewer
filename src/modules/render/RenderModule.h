@@ -49,13 +49,29 @@ private:
     double last_collision_publish_s_{0.0};
     std::string last_collision_id_;
     double last_frame_s_{0.0};
+    // right-click mouse-look state
     double last_mouse_x_{0.0};
     double last_mouse_y_{0.0};
     bool   mouse_initialized_{false};
-    int    last_published_fov_{0};
-    glm::dvec3 last_published_pos_{};
+
+    // middle-click pan state
+    double last_pan_x_{0.0};
+    double last_pan_y_{0.0};
+    bool   pan_initialized_{false};
+
+    // map tile request tracking (trigger re-fetch when camera moves > threshold)
+    glm::dvec3 last_tile_center_{953900.0, 1952030.0, 0.0};
+
+    // Building click popup
+    bool        show_pick_popup_{false};
+    std::string pick_popup_name_;
+    std::string pick_popup_addr_;
+    std::string pick_popup_json_;
+
+    int    last_published_fov_{-15};
+    glm::dvec3 last_published_pos_{953900.0, 1952030.0, 200.0};
     float  last_published_yaw_{0.0f};
-    float  last_published_pitch_{0.0f};
+    float  last_published_pitch_{-90.0f};
 };
 
 }  // namespace mv::modules

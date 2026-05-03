@@ -12,7 +12,9 @@
   "camera": {
     "default_pos_utmk_x": 953900.0,
     "default_pos_utmk_y": 1952030.0,
-    "default_pos_alt_m":  80.0
+    "default_pos_alt_m":  200.0,
+    "default_pitch_deg":  -90.0,
+    "default_fov_delta":  -15
   },
   "location_log": {
     "enabled":  true,
