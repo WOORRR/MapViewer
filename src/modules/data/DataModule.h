@@ -9,9 +9,9 @@
 namespace mv::modules {
 
 // Loads map data from PostgreSQL/PostGIS (wrr-postgres) and publishes
-// MapTileLoadedMsg.  Falls back to a hard-coded sample tile when the DB is
-// unreachable.  The spatial query uses the geom column (EPSG:5179) with a
-// GIST index, so the initial ST_GeomFromText population must complete first.
+// MapTileLoadedMsg.  When the DB is unreachable an empty tile is published
+// (no procedural fallback — data must come from the real DB).
+// The spatial query uses the geom column (EPSG:5179) with a GIST index.
 class DataModule : public ModuleBase {
 public:
     DataModule();
@@ -28,10 +28,8 @@ private:
     // Query buildings and roads inside the bbox and publish a tile.
     void query_and_publish(double cx, double cy, double half);
 
-    // Fallback when DB is unavailable.
-    void publish_fallback_tile(double cx, double cy);
-
-    uint32_t cell_hash(int gx, int gy) const;
+    // DB 미연결 시 빈 타일 발행 (임의 데이터 없음).
+    void publish_empty_tile(double cx, double cy);
 
     bool        db_ok_{false};
     uint32_t    version_{0};

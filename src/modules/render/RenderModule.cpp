@@ -148,7 +148,7 @@ void RenderModule::frame() {
             MapBoundsRequestMsg req;
             req.center_x = cam.position.x;
             req.center_y = cam.position.y;
-            req.radius_m = 800.0;
+            req.radius_m = 1000.0;  // 동서남북 1km
             req.lod      = 1;
             bus_->publish(req);
             last_tile_center_ = glm::dvec3{cam.position.x, cam.position.y, 0.0};
