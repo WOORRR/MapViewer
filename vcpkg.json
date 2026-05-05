@@ -12,6 +12,7 @@
     "geographiclib",
     "nlohmann-json",
     {"name": "imgui", "features": ["glfw-binding", "opengl3-binding"]},
-    "libpqxx"
+    "libpqxx",
+    "earcut-hpp"
   ]
 }

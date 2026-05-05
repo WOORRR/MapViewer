@@ -11,9 +11,10 @@
 namespace mv::render {
 
 struct Camera {
-    // 성남시청 (경기도 성남시 중원구 성남대로 997, 37.4199°N 127.1265°E)
-    // EPSG:5179 (UTM-K): X=966951, Y=1935705  상공 200m
-    glm::dvec3 position{966951.0, 1935705.0, 200.0};
+    // 성남시 수정구 전체 조감
+    // 수정구 bbox 중심 (calc_sujeong 결과): UTM-K X=966875, Y=1939158
+    // 상공 7000m에서 전체 구가 시야에 들어오도록 설정
+    glm::dvec3 position{966875.0, 1939158.0, 7000.0};
     float yaw_deg{0.0f};       // 0 = looking north (+y), positive = clockwise from above
     float pitch_deg{-90.0f};   // -90 = looking straight down → up=(0,1,0) → 화면 위 = 북쪽
     int   fov_delta_deg{-15};  // effective FoV = 60 + (-15) = 45°

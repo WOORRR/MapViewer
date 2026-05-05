@@ -20,6 +20,7 @@ find_package(GeographicLib CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 find_package(libpqxx CONFIG REQUIRED)
+# earcut-hpp is header-only; header is in vcpkg include path
 
 add_library(mv_core STATIC
     src/core/SessionId.cpp
@@ -80,3 +81,6 @@ add_test(NAME test_coord COMMAND test_coord)
 add_executable(test_picking tests/test_picking.cpp)
 target_link_libraries(test_picking PRIVATE mv_core GTest::gtest GTest::gtest_main)
 add_test(NAME test_picking COMMAND test_picking)
+
+add_executable(calc_sujeong tests/calc_sujeong.cpp)
+target_link_libraries(calc_sujeong PRIVATE mv_core)

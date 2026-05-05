@@ -42,11 +42,11 @@ static std::vector<std::pair<double,double>> parse_wkt_polygon(const std::string
 // Module lifecycle
 // ---------------------------------------------------------------------------
 
-// 성남시청 (경기도 성남시 중원구 성남대로 997, 37.4199°N 127.1265°E)
-// UTM-K (EPSG:5179): PostGIS ST_Transform으로 검증된 좌표
-static constexpr double kHomeX = 966951.0;
-static constexpr double kHomeY = 1935705.0;
-static constexpr double kTileRadius = 1000.0;  // 동서남북 1km
+// 성남시 수정구 전체 조감 중심점
+// calc_sujeong.exe 결과: bbox center X=966875, Y=1939158, 대각+5% ≈ 6103m
+static constexpr double kHomeX = 966875.0;
+static constexpr double kHomeY = 1939158.0;
+static constexpr double kTileRadius = 6000.0;  // 수정구 전체 커버
 
 DataModule::DataModule() : ModuleBase("data") {
     conn_str_ = "host=127.0.0.1 port=5432 dbname=postgres user=postgres password=Vtlnrl1225!";
@@ -117,8 +117,7 @@ FROM raw_rd_addr.tl_spbd_buld b
 WHERE b.geom IS NOT NULL
   AND ST_Intersects(
         b.geom,
-        ST_MakeEnvelope($1,$2,$3,$4,5179))
-LIMIT 2000;
+        ST_MakeEnvelope($1,$2,$3,$4,5179));
 )";
         auto bres = txn.exec(bq, pqxx::params{minx, miny, maxx, maxy});
 
@@ -139,17 +138,22 @@ LIMIT 2000;
         }
 
         // ---- Roads -----------------------------------------------------------
-        // tl_sprd_rw holds the road polygon; join tl_sprd_manage for name/width.
+        // tl_sprd_rw: rw_sn is NOT unique (same road has many polygon segments).
+        // LATERAL subquery picks ONE manage row per rw_sn without duplicating
+        // geometry rows — returns ALL 7,628 road polygons in this area.
         const std::string rq = R"(
 SELECT r.rw_sn, m.rn, m.road_bt, m.roa_cls_se,
        r.geom_wkt
 FROM raw_rd_addr.tl_sprd_rw r
-LEFT JOIN raw_rd_addr.tl_sprd_manage m ON r.rw_sn = m.rds_man_no
+LEFT JOIN LATERAL (
+    SELECT rn, road_bt, roa_cls_se
+    FROM raw_rd_addr.tl_sprd_manage
+    WHERE rds_man_no = r.rw_sn
+    LIMIT 1
+) m ON true
 WHERE r.geom IS NOT NULL
-  AND ST_Intersects(
-        r.geom,
-        ST_MakeEnvelope($1,$2,$3,$4,5179))
-LIMIT 1000;
+  AND ST_Intersects(r.geom, ST_MakeEnvelope($1,$2,$3,$4,5179))
+  AND ST_Area(r.geom) < 500000;  -- 상위 3개 이상 폴리곤만 제외 (842k/565k/522k)
 )";
         auto rres = txn.exec(rq, pqxx::params{minx, miny, maxx, maxy});
 

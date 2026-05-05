@@ -60,7 +60,7 @@ private:
     bool   pan_initialized_{false};
 
     // map tile request tracking (trigger re-fetch when camera moves > threshold)
-    glm::dvec3 last_tile_center_{966951.0, 1935705.0, 0.0};  // 성남시청
+    glm::dvec3 last_tile_center_{966875.0, 1939158.0, 0.0};  // 수정구 중심
 
     // Building click popup
     bool        show_pick_popup_{false};
@@ -69,7 +69,7 @@ private:
     std::string pick_popup_json_;
 
     int    last_published_fov_{-15};
-    glm::dvec3 last_published_pos_{966951.0, 1935705.0, 200.0};  // 성남시청
+    glm::dvec3 last_published_pos_{966875.0, 1939158.0, 7000.0};  // 수정구 중심
     float  last_published_yaw_{0.0f};
     float  last_published_pitch_{-90.0f};
 };

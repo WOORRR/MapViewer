@@ -1,10 +1,23 @@
 #include "render/opengl/GLRenderer.h"
 
+#include <mapbox/earcut.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
+#include <numeric>
+
+// earcut glm::vec2 adaptor — must be in mapbox::util, OUTSIDE any other namespace
+namespace mapbox { namespace util {
+template <> struct nth<0, glm::vec2> {
+    inline static float get(const glm::vec2& v) { return v.x; }
+};
+template <> struct nth<1, glm::vec2> {
+    inline static float get(const glm::vec2& v) { return v.y; }
+};
+}} // namespace mapbox::util
 
 namespace mv::render::gl {
 
@@ -65,6 +78,20 @@ void push_vertex(std::vector<float>& v,
                   float cr, float cg, float cb,
                   float nx, float ny, float nz) {
     v.insert(v.end(), {px, py, pz, cr, cg, cb, nx, ny, nz});
+}
+
+// earcut_triangulate — wraps mapbox::earcut for a single CCW ring (no holes)
+static void earcut_triangulate(const std::vector<glm::vec2>& ring,
+                                unsigned base_idx,
+                                std::vector<unsigned>& out_idx)
+{
+    if (ring.size() < 3) return;
+    // earcut input: outer ring + optional holes (we have no holes)
+    std::vector<std::vector<glm::vec2>> polygon = {ring};
+    auto local_idx = mapbox::earcut<unsigned>(polygon);
+    // local_idx offsets are 0-based into the flattened polygon — shift by base_idx
+    out_idx.reserve(out_idx.size() + local_idx.size());
+    for (unsigned i : local_idx) out_idx.push_back(base_idx + i);
 }
 
 }  // namespace
@@ -224,7 +251,15 @@ void Renderer::load_tile(const MapTileLoadedMsg& tile, float building_height_m) 
             continue;
         }
         const auto& ring = bf.rings.front().points;
-        const std::size_t N = ring.size();
+        // WKT polygons repeat the first vertex at the end to close the ring.
+        // Strip that duplicate so walls and ear-clipping work on unique verts only.
+        std::size_t N = ring.size();
+        if (N > 3) {
+            const double dx = ring[N-1].first  - ring[0].first;
+            const double dy = ring[N-1].second - ring[0].second;
+            if (std::abs(dx) < 1e-3 && std::abs(dy) < 1e-3) --N;
+        }
+        if (N < 3) continue;
 
         BuildingHit hit;
         hit.id = bf.id;
@@ -243,6 +278,23 @@ void Renderer::load_tile(const MapTileLoadedMsg& tile, float building_height_m) 
         }
         buildings_.push_back(std::move(hit));
 
+        // --- Normalise winding (Korean shapefile stores CW exterior rings) ---
+        // Shoelace signed-area: negative → CW → reverse to CCW so that
+        //   * wall normals point outward  (cross(edge, +Z))
+        //   * roof fan triangles face up  (+Z normal visible from above)
+        {
+            double sa2 = 0.0;
+            for (std::size_t k = 0; k < N; ++k) {
+                const std::size_t k1 = (k + 1) % N;
+                sa2 += static_cast<double>(base[k].x) * static_cast<double>(base[k1].y)
+                     - static_cast<double>(base[k1].x) * static_cast<double>(base[k].y);
+            }
+            if (sa2 < 0.0) {          // CW → reverse to CCW
+                std::reverse(base.begin(), base.end());
+                std::reverse(top.begin(),  top.end());
+            }
+        }
+
         // side faces
         for (std::size_t i = 0; i < N; ++i) {
             const std::size_t j = (i + 1) % N;
@@ -256,20 +308,17 @@ void Renderer::load_tile(const MapTileLoadedMsg& tile, float building_height_m) 
             push_vertex(b_verts, top[i].x,  top[i].y,  top[i].z,  kWallR, kWallG, kWallB, nrm.x, nrm.y, nrm.z);
             b_idx.insert(b_idx.end(), {i0, i0 + 1, i0 + 2, i0, i0 + 2, i0 + 3});
         }
-        // roof fan (assumes convex)
+        // Ear-clipping roof (handles non-convex building footprints)
         const unsigned r0 = static_cast<unsigned>(b_verts.size() / 9);
+        std::vector<glm::vec2> roof_ring(N);
         for (std::size_t i = 0; i < N; ++i) {
             push_vertex(b_verts,
                         top[i].x, top[i].y, top[i].z,
                         kRoofR, kRoofG, kRoofB,
                         0.0f, 0.0f, 1.0f);
+            roof_ring[i] = glm::vec2{top[i].x, top[i].y};
         }
-        for (std::size_t i = 1; i + 1 < N; ++i) {
-            b_idx.insert(b_idx.end(),
-                         {r0,
-                          r0 + static_cast<unsigned>(i),
-                          r0 + static_cast<unsigned>(i + 1)});
-        }
+        earcut_triangulate(roof_ring, r0, b_idx);
     }
 
     if (tile_buildings_vao_ != 0) {
@@ -286,50 +335,58 @@ void Renderer::load_tile(const MapTileLoadedMsg& tile, float building_height_m) 
         tile_buildings_index_count_ = 0;
     }
 
-    // Roads — quad strip slab at z=0.5 m using the feature's actual width_m.
-    constexpr float kRoadZ = 0.5f;
+    // Roads — tl_sprd_rw delivers the road SURFACE polygon (실폭도로).
+    // z = -0.1f keeps roads strictly below the building base (z=0) so
+    // buildings always occlude roads even when polygons nearly touch.
+    constexpr float kRoadZ = -0.1f;
     constexpr float kRoadR = 0.94f, kRoadG = 0.84f, kRoadB = 0.30f;
 
     std::vector<float> r_verts;
     std::vector<unsigned> r_idx;
     for (const RoadFeature& rf : tile.roads) {
-        if (rf.line.size() < 2) continue;
-        const float w = static_cast<float>(rf.width_m * 0.5);
-        const std::size_t M = rf.line.size();
-        std::vector<glm::vec2> tang(M, glm::vec2{0.0f});
-        // segment tangents
-        for (std::size_t i = 0; i + 1 < M; ++i) {
-            const glm::vec2 t{
-                static_cast<float>(rf.line[i + 1].first  - rf.line[i].first),
-                static_cast<float>(rf.line[i + 1].second - rf.line[i].second)
-            };
-            tang[i] = glm::length(t) > 1e-3f ? glm::normalize(t) : glm::vec2{1.0f, 0.0f};
-        }
-        tang.back() = tang[M - 2];
+        if (rf.line.size() < 3) continue;   // need at least a triangle
 
-        const unsigned start = static_cast<unsigned>(r_verts.size() / 9);
-        for (std::size_t i = 0; i < M; ++i) {
-            // average tangent at vertex
-            glm::vec2 t = tang[i];
-            if (i > 0) t = glm::normalize(t + tang[i - 1]);
-            const glm::vec2 n{-t.y, t.x};
-            const float lx = static_cast<float>(rf.line[i].first  - tile_origin_.x);
-            const float ly = static_cast<float>(rf.line[i].second - tile_origin_.y);
-            push_vertex(r_verts, lx + n.x * w, ly + n.y * w, kRoadZ,
-                        kRoadR, kRoadG, kRoadB,
-                        0.0f, 0.0f, 1.0f);
-            push_vertex(r_verts, lx - n.x * w, ly - n.y * w, kRoadZ,
+        // Build tile-local ring
+        std::vector<glm::vec2> ring;
+        ring.reserve(rf.line.size());
+        for (const auto& pt : rf.line) {
+            ring.push_back({
+                static_cast<float>(pt.first  - tile_origin_.x),
+                static_cast<float>(pt.second - tile_origin_.y)
+            });
+        }
+
+        // Strip duplicate closing vertex that WKT polygons append
+        if (ring.size() > 1 &&
+            std::abs(ring.back().x - ring.front().x) < 1e-2f &&
+            std::abs(ring.back().y - ring.front().y) < 1e-2f) {
+            ring.pop_back();
+        }
+        const std::size_t N = ring.size();
+        if (N < 3) continue;
+
+        // Shoelace winding normalisation (Korean shapefiles store CW rings)
+        double sa2 = 0.0;
+        for (std::size_t k = 0; k < N; ++k) {
+            const std::size_t k1 = (k + 1) % N;
+            sa2 += static_cast<double>(ring[k].x)  * static_cast<double>(ring[k1].y)
+                 - static_cast<double>(ring[k1].x) * static_cast<double>(ring[k].y);
+        }
+        if (sa2 < 0.0) std::reverse(ring.begin(), ring.end());  // CW → CCW
+
+        // Ear-clipping triangulation — handles non-convex road polygons
+        const unsigned r0 = static_cast<unsigned>(r_verts.size() / 9);
+        for (std::size_t i = 0; i < N; ++i) {
+            push_vertex(r_verts,
+                        ring[i].x, ring[i].y, kRoadZ,
                         kRoadR, kRoadG, kRoadB,
                         0.0f, 0.0f, 1.0f);
         }
-        for (std::size_t i = 0; i + 1 < M; ++i) {
-            const unsigned a = start + static_cast<unsigned>(i * 2);
-            const unsigned b = a + 1;
-            const unsigned c = a + 2;
-            const unsigned d = a + 3;
-            r_idx.insert(r_idx.end(), {a, b, c, b, d, c});
-        }
+        earcut_triangulate(ring, r0, r_idx);
     }
+    std::fprintf(stderr, "[render] road mesh: %zu verts, %zu indices (%zu features)\n",
+                 r_verts.size() / 9, r_idx.size(), tile.roads.size());
+
     if (tile_roads_vao_ != 0) {
         glDeleteBuffers(1, &tile_roads_vbo_);
         glDeleteBuffers(1, &tile_roads_ebo_);
